@@ -18,7 +18,10 @@ SD_Scoring_TOTALS.xlsx into the same folder with these sheets:
 Scores are impact scores: 2 = high impact, 1 = some impact, 0 = support.
   Checks   - anything odd: scores other than 0/1/2, blank boxes, mismatched labels
 """
+import re
 import sys
+import uuid
+import zipfile
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -71,6 +74,50 @@ def target_text(ws, row):
     lines = [x.strip() for x in str(t).split("\n") if x.strip()]
     first = lines[0] if lines else f"Row {row}"
     return first + (f"  (+{len(lines) - 1} more)" if len(lines) > 1 else "")
+
+
+def add_icon_set(xlsx_path, sheet_name, sqref):
+    """Add the template's custom icon set (empty circle / half circle / black
+    circle) to a sheet. openpyxl can't write custom icon sets, so this edits
+    the sheet XML inside the saved file directly."""
+    with zipfile.ZipFile(xlsx_path) as z:
+        parts = {n: z.read(n) for n in z.namelist()}
+    # find the sheet's XML file from workbook.xml + its relationships
+    wb_xml = parts["xl/workbook.xml"].decode()
+    rid = re.search(r'<sheet[^>]*name="%s"[^>]*r:id="([^"]+)"' % re.escape(sheet_name), wb_xml).group(1)
+    rels = parts["xl/_rels/workbook.xml.rels"].decode()
+    target = re.search(r'<Relationship[^>]*Id="%s"[^>]*Target="([^"]+)"' % rid, rels)
+    if not target:
+        target = re.search(r'<Relationship[^>]*Target="([^"]+)"[^>]*Id="%s"' % rid, rels)
+    path = target.group(1).lstrip("/")
+    path = path if path.startswith("xl/") else "xl/" + path
+
+    ext = (
+        '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" '
+        'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">'
+        '<x14:conditionalFormattings>'
+        '<x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">'
+        f'<x14:cfRule type="iconSet" priority="1" id="{{{str(uuid.uuid4()).upper()}}}">'
+        '<x14:iconSet showValue="0" custom="1">'
+        '<x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo>'
+        f'<x14:cfvo type="num"><xm:f>{SOME_MIN}</xm:f></x14:cfvo>'
+        f'<x14:cfvo type="num"><xm:f>{HIGH_MIN}</xm:f></x14:cfvo>'
+        '<x14:cfIcon iconSet="5Quarters" iconId="0"/>'
+        '<x14:cfIcon iconSet="5Quarters" iconId="2"/>'
+        '<x14:cfIcon iconSet="4TrafficLights" iconId="0"/>'
+        '</x14:iconSet></x14:cfRule>'
+        f'<xm:sqref>{sqref}</xm:sqref>'
+        '</x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>'
+    )
+    sheet_xml = parts[path].decode()
+    sheet_xml = sheet_xml.replace("</worksheet>", ext + "</worksheet>")
+    parts[path] = sheet_xml.encode()
+
+    tmp = Path(str(xlsx_path) + ".tmp")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, data in parts.items():
+            z.writestr(n, data)
+    tmp.replace(xlsx_path)
 
 
 def main(folder):
@@ -148,13 +195,12 @@ def main(folder):
     sy.title = "Symbols"
     sy["B1"] = (f"SYMBOLS from averages:  {SYM_HIGH} high impact (>= {HIGH_MIN})   "
                 f"{SYM_SOME} some impact ({SOME_MIN} to <{HIGH_MIN})   "
-                f"{SYM_SUPPORT} support (< {SOME_MIN})")
+                f"{SYM_SUPPORT} support (< {SOME_MIN})   - adjust via Conditional Formatting > Manage Rules")
     sy["B1"].font = Font(bold=True)
     for (r, c) in grid_cells():
         cell = sy.cell(r, c)
-        cell.value = SYMBOL[band(avg[(r, c)])]
-        cell.number_format = "General"
-        cell.font = Font(size=14)
+        cell.value = round(avg[(r, c)], 2)   # icons added by add_icon_set() after saving
+        cell.number_format = "0.00"
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     bold = Font(bold=True)
@@ -259,6 +305,7 @@ def main(folder):
 
     out_path = folder / OUTPUT_NAME
     out_wb.save(out_path)
+    add_icon_set(out_path, "Symbols", f"{FIRST_COL}{FIRST_ROW}:{LAST_COL}{LAST_ROW}")
     print(f"Tallied {len(files)} files -> {out_path}")
     if issues:
         print(f"{len(issues)} issue(s) - see the Checks sheet:")
