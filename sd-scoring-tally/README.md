@@ -12,7 +12,7 @@ python3 tally_scores.py "/path/to/folder"
 Writes `SD_Scoring_TOTALS.xlsx` into that folder:
 
 - **Totals**: the matrix in its original layout with J5:W12 summed (other sections copied from the first file)
-- **Summary**: Important Things and goal/target rows ranked by total
+- **Averages**: same layout, each J5:W12 box = total ÷ number of people who scored it
 - **Checks**: scores other than 0/1/2, blanks, boxes not everyone scored, mismatched headings
 
 Note: the template's icon-set conditional formatting isn't carried over to the totals file.
