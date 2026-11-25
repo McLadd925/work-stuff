@@ -11,7 +11,7 @@ SD_Scoring_TOTALS.xlsx into the same folder with three sheets:
 
   Totals   - the matrix in its original layout; J5:W12 = sum of everyone's scores
              (other sections are left as they are in the first file)
-  Averages - same layout; J5:W12 = total / number of people who scored that box
+  Averages - same layout; J5:W12 = total / number of files (blanks count as 0)
   Checks   - anything odd: scores other than 0/1/2, blank boxes, mismatched labels
 """
 import sys
@@ -80,31 +80,28 @@ def main(folder):
     for (r, c), cnt in responses.items():
         if 0 < cnt < len(files):
             issues.append(("(various)", f"{get_column_letter(c)}{r}",
-                           f"Only {cnt} of {len(files)} people scored this box"))
+                           f"Only {cnt} of {len(files)} people scored this box (blanks counted as 0)"))
 
     # ---- Output: reuse first file as the template so layout/formatting is kept ----
     out_wb = load_workbook(files[0])
     ws = out_wb.worksheets[0]
     ws.title = "Totals"
     for (r, c) in grid_cells():
-        ws.cell(r, c).value = totals[(r, c)] if responses[(r, c)] else None
+        ws.cell(r, c).value = totals[(r, c)]
     ws["B1"] = f"TOTALS from {len(files)} files"
     ws["B1"].font = Font(bold=True)
     for cell in ("O1", "P1"):          # stray values in the template
         ws[cell] = None
 
-    # Averages sheet: same layout, each box = total / number of people who scored it
+    # Averages sheet: same layout, each box = total / number of files (blanks = 0)
     av = out_wb.copy_worksheet(ws)
     av.title = "Averages"
-    av["B1"] = f"AVERAGES from {len(files)} files (total / number of votes)"
+    av["B1"] = f"AVERAGES from {len(files)} files (total / number of people; blanks = 0)"
     av["B1"].font = Font(bold=True)
     for (r, c) in grid_cells():
         cell = av.cell(r, c)
-        if responses[(r, c)]:
-            cell.value = round(totals[(r, c)] / responses[(r, c)], 2)
-            cell.number_format = "0.00"
-        else:
-            cell.value = None
+        cell.value = round(totals[(r, c)] / len(files), 2)   # blanks count as 0
+        cell.number_format = "0.00"
 
     bold = Font(bold=True)
     # Checks sheet
