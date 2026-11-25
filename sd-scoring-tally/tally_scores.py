@@ -12,8 +12,10 @@ SD_Scoring_TOTALS.xlsx into the same folder with these sheets:
   Totals   - the matrix in its original layout; J5:W12 = sum of everyone's scores
              (other sections are left as they are in the first file)
   Averages - same layout; J5:W12 = total / number of files (blanks count as 0)
-  Symbols  - averages shown as symbols: strong / moderate / weak (limits below)
-  Alignment- gaps in coverage, weak targets, and boxes where people disagreed
+  Symbols  - averages shown as symbols: high impact / some impact / support (limits below)
+  Alignment- Important Things with no high-impact target, target impact, and disagreements
+
+Scores are impact scores: 2 = high impact, 1 = some impact, 0 = support.
   Checks   - anything odd: scores other than 0/1/2, blank boxes, mismatched labels
 """
 import sys
@@ -32,9 +34,9 @@ VALID_SCORES = {0, 1, 2}
 TARGET_COL = "AE"       # improvement target text for each row
 
 # Symbol bands for averages (change the limits here)
-STRONG_MIN = 1.5        # average >= 1.5        -> strong
-MODERATE_MIN = 0.75     # 0.75 <= average < 1.5 -> moderate, below -> weak/none
-SYM_STRONG, SYM_MODERATE, SYM_WEAK = "\u25cf", "\u25d0", "\u25cb"   # ● ◐ ○
+HIGH_MIN = 1.5          # average >= 1.5        -> high impact
+SOME_MIN = 0.75         # 0.75 <= average < 1.5 -> some impact, below -> support
+SYM_HIGH, SYM_SOME, SYM_SUPPORT = "\u25cf", "\u25d0", "\u25cb"   # ● ◐ ○
 
 C1 = column_index_from_string(FIRST_COL)
 C2 = column_index_from_string(LAST_COL)
@@ -47,14 +49,14 @@ def grid_cells():
 
 
 def band(avg):
-    if avg >= STRONG_MIN:
-        return "strong"
-    if avg >= MODERATE_MIN:
-        return "moderate"
-    return "weak"
+    if avg >= HIGH_MIN:
+        return "high"
+    if avg >= SOME_MIN:
+        return "some"
+    return "support"
 
 
-SYMBOL = {"strong": SYM_STRONG, "moderate": SYM_MODERATE, "weak": SYM_WEAK}
+SYMBOL = {"high": SYM_HIGH, "some": SYM_SOME, "support": SYM_SUPPORT}
 
 
 def header_text(ws, col):
@@ -144,9 +146,9 @@ def main(folder):
     # Symbols sheet: averages turned back into symbols
     sy = out_wb.copy_worksheet(ws)
     sy.title = "Symbols"
-    sy["B1"] = (f"SYMBOLS from averages:  {SYM_STRONG} strong (>= {STRONG_MIN})   "
-                f"{SYM_MODERATE} moderate ({MODERATE_MIN} to <{STRONG_MIN})   "
-                f"{SYM_WEAK} weak/none (< {MODERATE_MIN})")
+    sy["B1"] = (f"SYMBOLS from averages:  {SYM_HIGH} high impact (>= {HIGH_MIN})   "
+                f"{SYM_SOME} some impact ({SOME_MIN} to <{HIGH_MIN})   "
+                f"{SYM_SUPPORT} support (< {SOME_MIN})")
     sy["B1"].font = Font(bold=True)
     for (r, c) in grid_cells():
         cell = sy.cell(r, c)
@@ -166,7 +168,7 @@ def main(folder):
 
     # Alignment sheet
     al = out_wb.create_sheet("Alignment")
-    al["A1"] = f"Alignment check - {len(files)} files, bands: strong >= {STRONG_MIN}, moderate >= {MODERATE_MIN}"
+    al["A1"] = f"Alignment check - {len(files)} files, bands: high impact >= {HIGH_MIN}, some impact >= {SOME_MIN}, below = support"
     al["A1"].font = title
     row = 3
 
@@ -177,22 +179,22 @@ def main(folder):
         row += 1
 
     # 1. Important things coverage
-    al.cell(row, 1, "1. Is every Important Thing driven by at least one target? (ranked by total of averages)").font = title
+    al.cell(row, 1, "1. Does every Important Thing have at least one high-impact target? (ranked by total impact)").font = title
     row += 1
-    header(("Rank", "Important Thing", "Total of averages", "Strong links", "Moderate links", "Status"))
+    header(("Rank", "Important Thing", "Total impact", "High impact", "Some impact", "Status"))
     col_stats = []
     for c in cols:
         bands = [band(avg[(r, c)]) for r in rows]
         col_stats.append((header_text(ws, c), sum(avg[(r, c)] for r in rows),
-                          bands.count("strong"), bands.count("moderate")))
+                          bands.count("high"), bands.count("some")))
     col_stats.sort(key=lambda x: -x[1])
     for rank, (name, tot, st, mo) in enumerate(col_stats, start=1):
         if st:
-            status, fill = "Covered", green
+            status, fill = "Has high-impact target(s)", green
         elif mo:
-            status, fill = "Weak - no strong link", amber
+            status, fill = "Some impact only - no high-impact target", amber
         else:
-            status, fill = "GAP - nothing drives this", red
+            status, fill = "Support only - no target has real impact", red
         for i, v in enumerate((rank, name, round(tot, 2), st, mo, status), start=1):
             al.cell(row, i, v)
         al.cell(row, 6).fill = fill
@@ -200,19 +202,19 @@ def main(folder):
 
     # 2. Targets
     row += 1
-    al.cell(row, 1, "2. Does every improvement target support the Important Things?").font = title
+    al.cell(row, 1, "2. How much impact does each improvement target have on the Important Things?").font = title
     row += 1
-    header(("Row", "Improvement target (first line)", "Total of averages", "Strong links", "Moderate links", "Status"))
+    header(("Row", "Improvement target (first line)", "Total impact", "High impact", "Some impact", "Status"))
     for r in rows:
         bands = [band(avg[(r, c)]) for c in cols]
-        st, mo = bands.count("strong"), bands.count("moderate")
+        st, mo = bands.count("high"), bands.count("some")
         tot = sum(avg[(r, c)] for c in cols)
         if st == 0 and mo == 0:
-            status, fill = "No link - drop or rewrite?", red
+            status, fill = "Support only - drop or rewrite?", red
         elif st == 0:
-            status, fill = "Weak - no strong link", amber
+            status, fill = "Some impact only - no high impact", amber
         elif st >= 0.7 * n_cols:
-            status, fill = "Strong against almost everything - too vague?", amber
+            status, fill = "High impact on almost everything - too broad?", amber
         else:
             status, fill = "OK", green
         for i, v in enumerate((r, target_text(ws, r), round(tot, 2), st, mo, status), start=1):
@@ -222,7 +224,7 @@ def main(folder):
 
     # 3. Disagreement
     row += 1
-    al.cell(row, 1, "3. Where did people disagree? (someone scored 0 and someone scored 2)").font = title
+    al.cell(row, 1, "3. Where did people disagree? (someone scored 0 = support and someone scored 2 = high impact)").font = title
     row += 1
     header(("Cell", "Important Thing", "Target row", "Average", "Scores given", ""))
     found = False
