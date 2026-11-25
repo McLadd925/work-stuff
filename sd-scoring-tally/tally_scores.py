@@ -13,7 +13,8 @@ SD_Scoring_TOTALS.xlsx into the same folder with these sheets:
              (other sections are left as they are in the first file)
   Averages - same layout; J5:W12 = total / number of files (blanks count as 0)
   Symbols  - averages shown as symbols: high impact / some impact / support (limits below)
-  Alignment- Important Things with no high-impact target, target impact, and disagreements
+  Alignment- targets ranked by contribution (ties at the top flagged), targets to
+             refine, split scores, and a check that every Important Thing is supported
 
 Scores are impact scores: 2 = high impact, 1 = some impact, 0 = support.
   Checks   - anything odd: scores other than 0/1/2, blank boxes, mismatched labels
@@ -39,6 +40,7 @@ TARGET_COL = "AE"       # improvement target text for each row
 # Symbol bands for averages (change the limits here)
 HIGH_MIN = 1.5          # average >= 1.5        -> high impact
 SOME_MIN = 0.75         # 0.75 <= average < 1.5 -> some impact, below -> support
+TOP_N = 3               # ties involving ranks 1..TOP_N are flagged on the Alignment sheet
 SYM_HIGH, SYM_SOME, SYM_SUPPORT = "\u25cf", "\u25d0", "\u25cb"   # ● ◐ ○
 
 C1 = column_index_from_string(FIRST_COL)
@@ -212,85 +214,116 @@ def main(folder):
     cols = range(C1, C2 + 1)
     n_cols = len(cols)
 
-    # Alignment sheet
+    # Alignment sheet - reviews each improvement target's contribution to the Important Things
     al = out_wb.create_sheet("Alignment")
-    al["A1"] = f"Alignment check - {len(files)} files, bands: high impact >= {HIGH_MIN}, some impact >= {SOME_MIN}, below = support"
+    al["A1"] = (f"Improvement target review - {len(files)} files.  "
+                f"Bands: high impact >= {HIGH_MIN}, some impact >= {SOME_MIN}, below = support")
     al["A1"].font = title
     row = 3
 
     def header(cells):
         nonlocal row
         for i, h in enumerate(cells, start=1):
-            al.cell(row, i, h).font = bold
+            if h:
+                al.cell(row, i, h).font = bold
         row += 1
 
-    # 1. Important things coverage
-    al.cell(row, 1, "1. Does every Important Thing have at least one high-impact target? (ranked by total impact)").font = title
+    def put(values):
+        nonlocal row
+        for i, v in enumerate(values, start=1):
+            if v is not None:
+                al.cell(row, i, v)
+        row += 1
+
+    # Per-target stats
+    targets = []
+    for r in rows:
+        bands = [band(avg[(r, c)]) for c in cols]
+        disagreements = sum(1 for c in cols
+                            if scores[(r, c)] and max(scores[(r, c)]) - min(scores[(r, c)]) >= 2)
+        targets.append({
+            "row": r, "text": target_text(ws, r),
+            "total": round(sum(avg[(r, c)] for c in cols), 2),
+            "high": bands.count("high"), "some": bands.count("some"),
+            "disagree": disagreements,
+        })
+    targets.sort(key=lambda t: -t["total"])
+    # competition ranking: equal totals share a rank (1, 2, 2, 4 ...)
+    for i, t in enumerate(targets):
+        t["rank"] = targets[i - 1]["rank"] if i and t["total"] == targets[i - 1]["total"] else i + 1
+    for t in targets:
+        t["tied"] = sum(1 for o in targets if o["total"] == t["total"]) > 1
+
+    # 1. Target ranking + follow-up flags
+    al.cell(row, 1, "1. Improvement targets ranked by total contribution to the Important Things").font = title
     row += 1
-    header(("Rank", "Important Thing", "Total impact", "High impact", "Some impact", "Status"))
+    al.cell(row, 1, f"Ties involving the top {TOP_N} ranks are flagged for discussion.  "
+                    "Total impact = sum of the averages across all Important Things.")
+    row += 1
+    header(("Rank", "Row", "Improvement target (first line)", "Total impact",
+            "High impact", "Some impact", "Disagreements", "Follow-up"))
+    for t in targets:
+        flags, fill = [], green
+        if t["tied"] and t["rank"] <= TOP_N:
+            flags.append(f"TIE at rank {t['rank']} - discuss")
+            fill = red
+        if t["high"] == 0 and t["some"] == 0:
+            flags.append("Support only - refine or drop")
+            fill = red
+        elif t["high"] == 0:
+            flags.append("No high impact - refine")
+            fill = fill if fill is red else amber
+        elif t["high"] >= 0.7 * n_cols:
+            flags.append("High impact on almost everything - too broad?")
+            fill = fill if fill is red else amber
+        if t["disagree"]:
+            flags.append(f"{t['disagree']} split score(s) - see section 2")
+            fill = fill if fill is red else amber
+        rank_label = f"={t['rank']}" if t["tied"] else t["rank"]
+        put((rank_label, t["row"], t["text"], t["total"], t["high"], t["some"],
+             t["disagree"], "; ".join(flags) or "OK"))
+        al.cell(row - 1, 8).fill = fill
+
+    # 2. Disagreements
+    row += 1
+    al.cell(row, 1, "2. Split scores to discuss (someone scored 0 = support, someone scored 2 = high impact)").font = title
+    row += 1
+    header(("Cell", "Row", "Important Thing", "Average", "Scores given"))
+    found = False
+    for t in sorted(targets, key=lambda t: t["row"]):
+        r = t["row"]
+        for c in cols:
+            sc = scores[(r, c)]
+            if sc and max(sc) - min(sc) >= 2:
+                found = True
+                put((f"{get_column_letter(c)}{r}", r, header_text(ws, c),
+                     round(avg[(r, c)], 2), ", ".join(str(x) for x in sc)))
+    if not found:
+        put(("No split scores",))
+
+    # 3. Priority check
+    row += 1
+    al.cell(row, 1, "3. Priority check - is every Important Thing supported by at least one high-impact target?").font = title
+    row += 1
+    header(("Rank", "", "Important Thing", "Total impact", "High impact", "Some impact", "", "Status"))
     col_stats = []
     for c in cols:
         bands = [band(avg[(r, c)]) for r in rows]
-        col_stats.append((header_text(ws, c), sum(avg[(r, c)] for r in rows),
+        col_stats.append((header_text(ws, c), round(sum(avg[(r, c)] for r in rows), 2),
                           bands.count("high"), bands.count("some")))
     col_stats.sort(key=lambda x: -x[1])
-    for rank, (name, tot, st, mo) in enumerate(col_stats, start=1):
-        if st:
+    for rank, (name, tot, hi, so) in enumerate(col_stats, start=1):
+        if hi:
             status, fill = "Has high-impact target(s)", green
-        elif mo:
+        elif so:
             status, fill = "Some impact only - no high-impact target", amber
         else:
             status, fill = "Support only - no target has real impact", red
-        for i, v in enumerate((rank, name, round(tot, 2), st, mo, status), start=1):
-            al.cell(row, i, v)
-        al.cell(row, 6).fill = fill
-        row += 1
+        put((rank, None, name, tot, hi, so, None, status))
+        al.cell(row - 1, 8).fill = fill
 
-    # 2. Targets
-    row += 1
-    al.cell(row, 1, "2. How much impact does each improvement target have on the Important Things?").font = title
-    row += 1
-    header(("Row", "Improvement target (first line)", "Total impact", "High impact", "Some impact", "Status"))
-    for r in rows:
-        bands = [band(avg[(r, c)]) for c in cols]
-        st, mo = bands.count("high"), bands.count("some")
-        tot = sum(avg[(r, c)] for c in cols)
-        if st == 0 and mo == 0:
-            status, fill = "Support only - drop or rewrite?", red
-        elif st == 0:
-            status, fill = "Some impact only - no high impact", amber
-        elif st >= 0.7 * n_cols:
-            status, fill = "High impact on almost everything - too broad?", amber
-        else:
-            status, fill = "OK", green
-        for i, v in enumerate((r, target_text(ws, r), round(tot, 2), st, mo, status), start=1):
-            al.cell(row, i, v)
-        al.cell(row, 6).fill = fill
-        row += 1
-
-    # 3. Disagreement
-    row += 1
-    al.cell(row, 1, "3. Where did people disagree? (someone scored 0 = support and someone scored 2 = high impact)").font = title
-    row += 1
-    header(("Cell", "Important Thing", "Target row", "Average", "Scores given", ""))
-    found = False
-    for (r, c) in grid_cells():
-        sc = scores[(r, c)]
-        if sc and max(sc) - min(sc) >= 2:
-            found = True
-            for i, v in enumerate((f"{get_column_letter(c)}{r}", header_text(ws, c), r,
-                                   round(avg[(r, c)], 2), ", ".join(str(x) for x in sc)), start=1):
-                al.cell(row, i, v)
-            row += 1
-    if not found:
-        al.cell(row, 1, "No boxes with a 0-vs-2 split")
-        row += 1
-
-    al.column_dimensions["A"].width = 8
-    al.column_dimensions["B"].width = 60
-    for col in "CDE":
-        al.column_dimensions[col].width = 16
-    al.column_dimensions["F"].width = 42
+    for col, w in zip("ABCDEFGH", (7, 6, 62, 13, 12, 12, 14, 48)):
+        al.column_dimensions[col].width = w
 
     # Checks sheet
     ck = out_wb.create_sheet("Checks")
