@@ -158,103 +158,57 @@ def write_takeaways(wb, n_files, targets, col_stats, issues, n_cols, src):
         r += 1
         line(title, Font(bold=True, size=12), head_fill)
 
+    def rows_list(ts):
+        return ", ".join(str(t["row"]) for t in ts)
+
     line("SD Improvement Target Review - Key Takeaways", Font(bold=True, size=16))
-    line(f"Based on {n_files} completed scoring sheet(s). Each person scored how much each improvement "
-         f"target contributes to each of the {n_cols} Important Things: 2 = high impact, 1 = some impact, "
-         f"0 = support. Scores were averaged; an average of {HIGH_MIN} or more counts as high impact.")
+    line(f"{n_files} scoring sheets. 2 = high impact, 1 = some, 0 = support. "
+         f"High impact = average of {HIGH_MIN}+.", Font(italic=True))
+    r += 1
 
-    # 1. Top targets
-    section(f"1. Highest-contributing improvement targets (top {TOP_N})")
-    for t in [t for t in targets if t["rank"] <= TOP_N]:
-        line(f"{'=' if t['tied'] else ''}{t['rank']}. {short(t)} - total impact {t['total']}, "
-             f"high impact on {t['high']} of {n_cols} Important Things", indent=True)
+    # Top targets + ties
+    top = [t for t in targets if t["rank"] <= TOP_N]
+    line("Top targets:", indent=True)
+    for t in top:
+        line(f"      {'=' if t['tied'] else ''}{t['rank']}.  {short(t, 70)}")
     top_ties = sorted({t["rank"] for t in targets if t["tied"] and t["rank"] <= TOP_N})
-    if top_ties:
-        for rk in top_ties:
-            tied = [t for t in targets if t["rank"] == rk]
-            line(f"TIE at rank {rk}: " + " and ".join(short(t, 40) for t in tied)
-                 + " scored the same - discuss to agree which comes first.", Font(bold=True, color="C00000"), indent=True)
-    else:
-        line("No ties at the top - the ranking is clear.", indent=True)
+    for rk in top_ties:
+        line(f"Tie at #{rk}: rows {rows_list([t for t in targets if t['rank'] == rk])} - discuss.",
+             Font(bold=True, color="C00000"), indent=True)
+    if not top_ties:
+        line("No ties at the top.", indent=True)
 
-    # 2. Protect
-    section("2. Targets to protect (the only high-impact target for an Important Thing)")
+    # Coverage
+    gaps = [x[0] for x in col_stats if not x[2]]
+    no_agree = [x[0] for x in col_stats if x[2] and not x[4]]
+    if gaps:
+        line("Gaps - no high-impact target: " + ", ".join(gaps), Font(bold=True, color="C00000"), indent=True)
+    else:
+        line("Every Important Thing has a high-impact target.", indent=True)
+    if no_agree:
+        line("No full agreement on: " + ", ".join(no_agree) + " - agree which target owns it.", indent=True)
+
+    # Protect
     sole = [t for t in sorted(targets, key=lambda t: t["row"]) if t["sole"]]
     if sole:
-        for t in sole:
-            line(f"{short(t)} - the only high-impact target for: {', '.join(t['sole'])}. "
-                 "Dropping or weakening it would leave a gap.", indent=True)
-    else:
-        line("Every Important Thing has more than one high-impact target - no single point of failure.", indent=True)
+        line(f"Protect rows {rows_list(sole)} - each is the only high-impact target for an Important Thing.",
+             indent=True)
 
-    # 3. Important Things coverage
-    section("3. Are all Important Things covered?")
-    gaps = [x for x in col_stats if not x[2]]
-    no_agree = [x for x in col_stats if x[2] and not x[4]]
-    if not gaps and not no_agree:
-        line("Yes - every Important Thing has at least one high-impact target that everyone scored 2.", indent=True)
-    else:
-        if gaps:
-            for name, *_ in gaps:
-                line(f"GAP: {name} has no high-impact target. A target needs adding or refining.",
-                     Font(bold=True, color="C00000"), indent=True)
-        else:
-            line("Every Important Thing has at least one high-impact target.", indent=True)
-        for name, *_ in no_agree:
-            line(f"{name}: high impact on average, but no target that everyone scored 2 - agree which target owns it.",
-                 indent=True)
-
-    # 4. Refine
-    section("4. Targets that may need refining")
-    refine = []
-    for t in sorted(targets, key=lambda t: t["row"]):
-        if t["high"] == 0 and t["some"] == 0:
-            refine.append(f"{short(t)} - support only; it doesn't clearly drive any Important Thing.")
-        elif t["high"] == 0:
-            refine.append(f"{short(t)} - no high impact on any Important Thing.")
-        elif t["high"] >= 0.7 * n_cols:
-            refine.append(f"{short(t)} - high impact on almost everything; may be too broad to measure.")
-    for x in refine or ["None - every target has high impact on at least one Important Thing without being too broad."]:
-        line(x, indent=True)
-
-    # 5. Disagreements
-    section("5. Where people disagreed (one scored 0, another scored 2)")
-    split = [t for t in sorted(targets, key=lambda t: t["row"]) if t["disagree"]]
-    if split:
-        for t in split:
-            line(f"{short(t)} - {t['disagree']} split score(s). See the Alignment tab, section 2.", indent=True)
-    else:
-        line("No major disagreements.", indent=True)
-
-    # 6. Next steps
-    section("6. Suggested next steps")
-    steps = []
-    if top_ties:
-        steps.append("Discuss and separate the tied targets at the top of the ranking.")
-    if split:
-        steps.append("Talk through the split scores, starting with the targets with the most splits.")
-    if sole:
-        steps.append("Confirm the 'protect' targets are resourced, as each is the only strong driver of an Important Thing.")
-    if gaps or no_agree:
-        steps.append("Agree which target owns each Important Thing flagged in section 3, or refine targets to cover it.")
+    # Refine
+    refine = [t for t in sorted(targets, key=lambda t: t["row"])
+              if t["high"] == 0 or t["high"] >= 0.7 * n_cols]
     if refine:
-        steps.append("Refine or merge the targets listed in section 4.")
-    steps.append("Re-score any changed targets and re-run the tally to confirm.")
-    for i, x in enumerate(steps, start=1):
-        line(f"{i}. {x}")
+        line(f"Refine rows {rows_list(refine)} - no high impact, or too broad.", indent=True)
 
-    if issues:
-        r += 1
-        line(f"Note: {len(issues)} data issue(s) found (e.g. blank boxes) - see the Checks tab.", Font(italic=True))
+    # Disagreements: top 2 rows by number of splits
+    split = sorted([t for t in targets if t["disagree"]], key=lambda t: (-t["disagree"], t["row"]))
+    if split:
+        worst = ", ".join(f"row {t['row']} ({t['disagree']})" for t in split[:2])
+        line(f"Most disagreement: {worst}. Talk these through first.", indent=True)
 
-    section("How to read the other tabs")
-    for x in ("Totals - everyone's scores added up, in the original matrix layout.",
-              "Averages - each total divided by the number of people.",
-              f"Symbols - the averages as symbols: full circle = high impact ({HIGH_MIN}+), half = some impact "
-              f"({SOME_MIN}-{HIGH_MIN}), empty = support.",
-              "Alignment - the detail behind these takeaways: target ranking, split scores, Important Things coverage.",
-              "Checks - data problems such as blank boxes or scores outside 0-2."):
-        line(x, indent=True)
+    r += 1
+    extra = f"  {len(issues)} data issue(s) on the Checks tab." if issues else ""
+    line("Detail on the Alignment tab." + extra, Font(italic=True, color="595959"))
 
 
 def main(folder):
