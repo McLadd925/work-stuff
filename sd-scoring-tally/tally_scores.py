@@ -303,26 +303,33 @@ def main(folder):
 
     # 3. Priority check
     row += 1
-    al.cell(row, 1, "3. Priority check - is every Important Thing supported by at least one high-impact target?").font = title
+    al.cell(row, 1, "3. Priority check - does every Important Thing have a high-impact target, ideally one everyone scored 2?").font = title
     row += 1
-    header(("Rank", "", "Important Thing", "Total impact", "High impact", "Some impact", "", "Status"))
+    al.cell(row, 1, "Full agreement = every person scored that target 2 (a blank counts as 0).")
+    row += 1
+    header(("Rank", "", "Important Thing", "Total impact", "High impact", "Some impact",
+            "Full-agreement rows", "Status"))
     col_stats = []
     for c in cols:
         bands = [band(avg[(r, c)]) for r in rows]
+        unanimous = [r for r in rows if scores[(r, c)] and min(scores[(r, c)]) == 2]
         col_stats.append((header_text(ws, c), round(sum(avg[(r, c)] for r in rows), 2),
-                          bands.count("high"), bands.count("some")))
+                          bands.count("high"), bands.count("some"), unanimous))
     col_stats.sort(key=lambda x: -x[1])
-    for rank, (name, tot, hi, so) in enumerate(col_stats, start=1):
-        if hi:
-            status, fill = "Has high-impact target(s)", green
+    for rank, (name, tot, hi, so, unanimous) in enumerate(col_stats, start=1):
+        if unanimous:
+            status, fill = "OK - high impact with full agreement", green
+        elif hi:
+            status, fill = "High impact, but no target everyone scored 2 - discuss", amber
         elif so:
-            status, fill = "Some impact only - no high-impact target", amber
+            status, fill = "No high-impact target - gap", red
         else:
-            status, fill = "Support only - no target has real impact", red
-        put((rank, None, name, tot, hi, so, None, status))
+            status, fill = "Support only - gap", red
+        put((rank, None, name, tot, hi, so,
+             ", ".join(str(r) for r in unanimous) or "none", status))
         al.cell(row - 1, 8).fill = fill
 
-    for col, w in zip("ABCDEFGH", (7, 6, 62, 13, 12, 12, 14, 48)):
+    for col, w in zip("ABCDEFGH", (7, 6, 62, 13, 12, 12, 20, 52)):
         al.column_dimensions[col].width = w
 
     # Checks sheet
