@@ -168,15 +168,14 @@ def write_takeaways(wb, n_files, targets, col_stats, issues, n_cols, src):
 
     # Top targets + ties
     top = [t for t in targets if t["rank"] <= TOP_N]
-    line("Top targets:", indent=True)
+    top_ties = sorted({t["rank"] for t in targets if t["tied"] and t["rank"] <= TOP_N})
+    line(f"Top {TOP_N} targets, ranked by total impact across all Important Things"
+         + ("" if top_ties else " (no tied scores)") + ":", indent=True)
     for t in top:
         line(f"      {'=' if t['tied'] else ''}{t['rank']}.  {short(t, 70)}")
-    top_ties = sorted({t["rank"] for t in targets if t["tied"] and t["rank"] <= TOP_N})
     for rk in top_ties:
-        line(f"Tie at #{rk}: rows {rows_list([t for t in targets if t['rank'] == rk])} - discuss.",
-             Font(bold=True, color="C00000"), indent=True)
-    if not top_ties:
-        line("No ties at the top.", indent=True)
+        line(f"Rows {rows_list([t for t in targets if t['rank'] == rk])} have the same total score "
+             f"(joint #{rk}) - discuss which comes first.", Font(bold=True, color="C00000"), indent=True)
 
     # Coverage
     gaps = [x[0] for x in col_stats if not x[2]]
