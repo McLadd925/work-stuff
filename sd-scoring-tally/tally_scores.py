@@ -9,6 +9,7 @@ Reads every .xlsx in the folder (skipping Excel lock files and any previous
 output), adds up each score cell in the Important Things grid J5:W12, and writes
 SD_Scoring_TOTALS.xlsx into the same folder with these sheets:
 
+  Key Takeaways - plain-English summary of the results (first tab)
   Totals   - the matrix in its original layout; J5:W12 = sum of everyone's scores
              (other sections are left as they are in the first file)
   Averages - same layout; J5:W12 = total / number of files (blanks count as 0)
@@ -120,6 +121,140 @@ def add_icon_set(xlsx_path, sheet_name, sqref):
         for n, data in parts.items():
             z.writestr(n, data)
     tmp.replace(xlsx_path)
+
+
+def short(t, n=60):
+    txt = t["text"].split("  (+")[0]
+    txt = txt if len(txt) <= n else txt[:n - 3].rstrip() + "..."
+    return f"Row {t['row']} - {txt}"
+
+
+def write_takeaways(wb, n_files, targets, col_stats, issues, n_cols, src):
+    """Plain-English summary sheet, placed first in the workbook."""
+    kt = wb.create_sheet("Key Takeaways")
+    wb.move_sheet(kt, offset=-(len(wb.sheetnames) - 1))
+    kt.sheet_view.showGridLines = False
+    kt.sheet_properties.pageSetUpPr.fitToPage = True   # print: one page wide
+    kt.page_setup.fitToWidth = 1
+    kt.page_setup.fitToHeight = 0
+    kt.page_setup.orientation = "landscape"
+    kt.column_dimensions["A"].width = 3
+    kt.column_dimensions["B"].width = 120
+    head_fill = PatternFill("solid", fgColor="DDEBF7")
+    r = 1
+
+    def line(text, font=None, fill=None, indent=False):
+        nonlocal r
+        c = kt.cell(r, 2, ("\u2022  " + text) if indent else text)
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+        if font:
+            c.font = font
+        if fill:
+            c.fill = fill
+        r += 1
+
+    def section(title):
+        nonlocal r
+        r += 1
+        line(title, Font(bold=True, size=12), head_fill)
+
+    line("SD Improvement Target Review - Key Takeaways", Font(bold=True, size=16))
+    line(f"Based on {n_files} completed scoring sheet(s). Each person scored how much each improvement "
+         f"target contributes to each of the {n_cols} Important Things: 2 = high impact, 1 = some impact, "
+         f"0 = support. Scores were averaged; an average of {HIGH_MIN} or more counts as high impact.")
+
+    # 1. Top targets
+    section(f"1. Highest-contributing improvement targets (top {TOP_N})")
+    for t in [t for t in targets if t["rank"] <= TOP_N]:
+        line(f"{'=' if t['tied'] else ''}{t['rank']}. {short(t)} - total impact {t['total']}, "
+             f"high impact on {t['high']} of {n_cols} Important Things", indent=True)
+    top_ties = sorted({t["rank"] for t in targets if t["tied"] and t["rank"] <= TOP_N})
+    if top_ties:
+        for rk in top_ties:
+            tied = [t for t in targets if t["rank"] == rk]
+            line(f"TIE at rank {rk}: " + " and ".join(short(t, 40) for t in tied)
+                 + " scored the same - discuss to agree which comes first.", Font(bold=True, color="C00000"), indent=True)
+    else:
+        line("No ties at the top - the ranking is clear.", indent=True)
+
+    # 2. Protect
+    section("2. Targets to protect (the only high-impact target for an Important Thing)")
+    sole = [t for t in sorted(targets, key=lambda t: t["row"]) if t["sole"]]
+    if sole:
+        for t in sole:
+            line(f"{short(t)} - the only high-impact target for: {', '.join(t['sole'])}. "
+                 "Dropping or weakening it would leave a gap.", indent=True)
+    else:
+        line("Every Important Thing has more than one high-impact target - no single point of failure.", indent=True)
+
+    # 3. Important Things coverage
+    section("3. Are all Important Things covered?")
+    gaps = [x for x in col_stats if not x[2]]
+    no_agree = [x for x in col_stats if x[2] and not x[4]]
+    if not gaps and not no_agree:
+        line("Yes - every Important Thing has at least one high-impact target that everyone scored 2.", indent=True)
+    else:
+        if gaps:
+            for name, *_ in gaps:
+                line(f"GAP: {name} has no high-impact target. A target needs adding or refining.",
+                     Font(bold=True, color="C00000"), indent=True)
+        else:
+            line("Every Important Thing has at least one high-impact target.", indent=True)
+        for name, *_ in no_agree:
+            line(f"{name}: high impact on average, but no target that everyone scored 2 - agree which target owns it.",
+                 indent=True)
+
+    # 4. Refine
+    section("4. Targets that may need refining")
+    refine = []
+    for t in sorted(targets, key=lambda t: t["row"]):
+        if t["high"] == 0 and t["some"] == 0:
+            refine.append(f"{short(t)} - support only; it doesn't clearly drive any Important Thing.")
+        elif t["high"] == 0:
+            refine.append(f"{short(t)} - no high impact on any Important Thing.")
+        elif t["high"] >= 0.7 * n_cols:
+            refine.append(f"{short(t)} - high impact on almost everything; may be too broad to measure.")
+    for x in refine or ["None - every target has high impact on at least one Important Thing without being too broad."]:
+        line(x, indent=True)
+
+    # 5. Disagreements
+    section("5. Where people disagreed (one scored 0, another scored 2)")
+    split = [t for t in sorted(targets, key=lambda t: t["row"]) if t["disagree"]]
+    if split:
+        for t in split:
+            line(f"{short(t)} - {t['disagree']} split score(s). See the Alignment tab, section 2.", indent=True)
+    else:
+        line("No major disagreements.", indent=True)
+
+    # 6. Next steps
+    section("6. Suggested next steps")
+    steps = []
+    if top_ties:
+        steps.append("Discuss and separate the tied targets at the top of the ranking.")
+    if split:
+        steps.append("Talk through the split scores, starting with the targets with the most splits.")
+    if sole:
+        steps.append("Confirm the 'protect' targets are resourced, as each is the only strong driver of an Important Thing.")
+    if gaps or no_agree:
+        steps.append("Agree which target owns each Important Thing flagged in section 3, or refine targets to cover it.")
+    if refine:
+        steps.append("Refine or merge the targets listed in section 4.")
+    steps.append("Re-score any changed targets and re-run the tally to confirm.")
+    for i, x in enumerate(steps, start=1):
+        line(f"{i}. {x}")
+
+    if issues:
+        r += 1
+        line(f"Note: {len(issues)} data issue(s) found (e.g. blank boxes) - see the Checks tab.", Font(italic=True))
+
+    section("How to read the other tabs")
+    for x in ("Totals - everyone's scores added up, in the original matrix layout.",
+              "Averages - each total divided by the number of people.",
+              f"Symbols - the averages as symbols: full circle = high impact ({HIGH_MIN}+), half = some impact "
+              f"({SOME_MIN}-{HIGH_MIN}), empty = support.",
+              "Alignment - the detail behind these takeaways: target ranking, split scores, Important Things coverage.",
+              "Checks - data problems such as blank boxes or scores outside 0-2."):
+        line(x, indent=True)
 
 
 def main(folder):
@@ -247,6 +382,10 @@ def main(folder):
             "high": bands.count("high"), "some": bands.count("some"),
             "disagree": disagreements,
         })
+    names = {c: header_text(ws, c) for c in cols}
+    high_rows = {c: [r for r in rows if band(avg[(r, c)]) == "high"] for c in cols}
+    for t in targets:
+        t["sole"] = [names[c] for c in cols if high_rows[c] == [t["row"]]]
     targets.sort(key=lambda t: -t["total"])
     # competition ranking: equal totals share a rank (1, 2, 2, 4 ...)
     for i, t in enumerate(targets):
@@ -261,7 +400,7 @@ def main(folder):
                     "Total impact = sum of the averages across all Important Things.")
     row += 1
     header(("Rank", "Row", "Improvement target (first line)", "Total impact",
-            "High impact", "Some impact", "Disagreements", "Follow-up"))
+            "High impact", "Some impact", "Disagreements", "Only high-impact target for", "Follow-up"))
     for t in targets:
         flags, fill = [], green
         if t["tied"] and t["rank"] <= TOP_N:
@@ -276,13 +415,17 @@ def main(folder):
         elif t["high"] >= 0.7 * n_cols:
             flags.append("High impact on almost everything - too broad?")
             fill = fill if fill is red else amber
+        if t["sole"]:
+            flags.insert(0, f"PROTECT - only high-impact target for {len(t['sole'])} Important Thing(s)")
+            fill = fill if fill is red else amber
         if t["disagree"]:
             flags.append(f"{t['disagree']} split score(s) - see section 2")
             fill = fill if fill is red else amber
         rank_label = f"={t['rank']}" if t["tied"] else t["rank"]
         put((rank_label, t["row"], t["text"], t["total"], t["high"], t["some"],
-             t["disagree"], "; ".join(flags) or "OK"))
-        al.cell(row - 1, 8).fill = fill
+             t["disagree"], ", ".join(t["sole"]) or "-", "; ".join(flags) or "OK"))
+        al.cell(row - 1, 9).fill = fill
+        al.cell(row - 1, 8).alignment = Alignment(wrap_text=True, vertical="top")
 
     # 2. Disagreements
     row += 1
@@ -329,8 +472,10 @@ def main(folder):
              ", ".join(str(r) for r in unanimous) or "none", status))
         al.cell(row - 1, 8).fill = fill
 
-    for col, w in zip("ABCDEFGH", (7, 6, 62, 13, 12, 12, 20, 52)):
+    for col, w in zip("ABCDEFGHI", (7, 6, 62, 13, 12, 12, 20, 40, 60)):
         al.column_dimensions[col].width = w
+
+    write_takeaways(out_wb, len(files), targets, col_stats, issues, n_cols, ws)
 
     # Checks sheet
     ck = out_wb.create_sheet("Checks")
